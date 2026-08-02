@@ -360,9 +360,12 @@ class WhatsAppBehaviorMixin:
                 return False
         else:
             sender_id = str(data.get("senderId") or data.get("from") or "")
-            if not self._is_dm_intake_allowed(sender_id):
+            # Intake may be deliberately broader than reply authorization.
+            # The adapter can archive silent-ingest messages without dispatching
+            # them to the agent when WHATSAPP_INTAKE_ALL_USERS=true.
+            intake_all = str(os.getenv("WHATSAPP_INTAKE_ALL_USERS", "")).lower() in {"1", "true", "yes", "on"}
+            if not intake_all and not self._is_dm_intake_allowed(sender_id):
                 return False
-            # DMs that pass the policy gate are always processed
             return True
         # Group messages: check mention / free-response settings
         chat_id = str(data.get("chatId") or "")

@@ -1271,6 +1271,11 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                         for msg_data in messages:
                             event = await self._build_message_event(msg_data)
                             if event:
+                                # Broad intake is archive-only for unauthorized senders.
+                                # The bridge marks reply authorization separately from intake.
+                                if msg_data.get("replyAuthorized") is False:
+                                    logger.info("[%s] Silent intake: archived message from unauthorized sender", self.name)
+                                    continue
                                 # Fire-and-forget: a slow bridge /read must not
                                 # delay message dispatch (matches BlueBubbles
                                 # asyncio.create_task pattern for mark_read).
