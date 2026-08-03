@@ -111,6 +111,7 @@ const PAIR_JSON = args.includes('--pair-json');
 const WHATSAPP_MODE = getArg('mode', process.env.WHATSAPP_MODE || 'self-chat'); // "bot" or "self-chat"
 const WHATSAPP_DM_POLICY = String(process.env.WHATSAPP_DM_POLICY || 'open').trim().toLowerCase();
 const ALLOWED_USERS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_USERS || '');
+const ALLOWED_REPLY_GROUPS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_REPLY_GROUPS || '');
 // Intake and reply authorization are separate: when enabled, retain every
 // inbound message, while ALLOWED_USERS remains the only reply authorization.
 const INTAKE_ALL_USERS = ['1', 'true', 'yes', 'on'].includes(
@@ -661,7 +662,9 @@ async function startSocket() {
 
       // Keep intake open, but explicitly mark whether the sender is allowed
       // to receive an agent response. The adapter must honor this marker.
-      const replyAuthorized = matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR);
+      const replyAuthorized = isGroup
+        ? matchesAllowedUser(chatId, ALLOWED_REPLY_GROUPS, SESSION_DIR)
+        : matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR);
       const messageContent = getMessageContent(msg);
       if (messageContent.pollUpdateMessage) {
         const pollUpdateMessage = messageContent.pollUpdateMessage;
@@ -821,6 +824,9 @@ app.use((req, res, next) => {
 // interactive profile only the configured owner may receive replies.
 function outboundTargetAuthorized(chatId) {
   if (!chatId) return false;
+  if (String(chatId).endsWith('@g.us')) {
+    return matchesAllowedUser(chatId, ALLOWED_REPLY_GROUPS, SESSION_DIR);
+  }
   const target = String(chatId).replace(/@.*/, '').replace(/\D/g, '');
   return matchesAllowedUser(target, ALLOWED_USERS, SESSION_DIR);
 }
