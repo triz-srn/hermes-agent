@@ -337,6 +337,13 @@ _MODEL_NOT_FOUND_PATTERNS = [
     # and the error surfaces as a confusing "model not found" message
     # instead of automatically failing over.  See PR #58446.
     "no endpoints found that support tool use",
+    # 9Router gateway (multi-provider aggregator) surfaces a dead/missing
+    # upstream credential as 404 with this message even though the error
+    # body carries code="model_not_found".  Without this pattern the error
+    # classifies as generic 404 -> should_fallback=False, so a model whose
+    # upstream provider was deactivated (e.g. codex/minimax) silently kills
+    # the job instead of failing over to the configured fallback chain.
+    "no active credentials for provider",
 ]
 
 # Malformed-message-array 400s.  Deterministic request-shape rejections that
