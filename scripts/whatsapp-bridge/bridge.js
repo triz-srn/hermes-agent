@@ -24,7 +24,7 @@ import express from 'express';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import path from 'path';
-import { mkdirSync, readFileSync, existsSync, readdirSync, unlinkSync } from 'fs';
+import { mkdirSync, readFileSync, existsSync, readdirSync, unlinkSync, appendFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { randomBytes, createHash } from 'crypto';
 import { execFileSync } from 'child_process';
@@ -767,6 +767,35 @@ async function startSocket() {
       }
 
       messageStore.remember(msg);
+      // Durable intake spool: every real inbound message is appended to a
+      // daily JSONL file under <session>/../intake/YYYY/MM/YYYYMMDD.jsonl.
+      // This persists ALL senders (including silent-ingest non-owner
+      // messages) so OTP/correlation lookups never depend on a live queue.
+      try {
+        const _now = new Date();
+        const _y = _now.getFullYear();
+        const _m = String(_now.getMonth() + 1).padStart(2, '0');
+        const _d = String(_now.getDate()).padStart(2, '0');
+        const _intakeDir = path.join(SESSION_DIR, '..', 'intake', String(_y), _m);
+        mkdirSync(_intakeDir, { recursive: true });
+        const _line = JSON.stringify({
+          ts: _now.toISOString(),
+          chatId,
+          senderId,
+          senderNumber,
+          isGroup,
+          fromOwner,
+          replyAuthorized,
+          body: event.body,
+          hasMedia: event.hasMedia,
+          mediaType: event.mediaType,
+          mediaUrls: event.mediaUrls || [],
+          messageId: event.messageId,
+        });
+        appendFileSync(path.join(_intakeDir, `${_y}${_m}${_d}.jsonl`), `${_line}\n`);
+      } catch (spoolErr) {
+        console.warn('[bridge] intake spool write failed:', spoolErr.message);
+      }
       messageQueue.push(event);
       emitDebugEvent({
         stage: 'queued',
