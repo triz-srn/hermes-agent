@@ -112,6 +112,9 @@ const WHATSAPP_MODE = getArg('mode', process.env.WHATSAPP_MODE || 'self-chat'); 
 const WHATSAPP_DM_POLICY = String(process.env.WHATSAPP_DM_POLICY || 'open').trim().toLowerCase();
 const ALLOWED_USERS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_USERS || '');
 const ALLOWED_REPLY_GROUPS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_REPLY_GROUPS || '');
+// Outbound-only groups: API /send may deliver to these groups, but inbound
+// messages from them are NOT reply-authorized (kirim-only, no balas).
+const ALLOWED_OUTBOUND_GROUPS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_OUTBOUND_GROUPS || '');
 // Intake and reply authorization are separate: when enabled, retain every
 // inbound message, while ALLOWED_USERS remains the only reply authorization.
 const INTAKE_ALL_USERS = ['1', 'true', 'yes', 'on'].includes(
@@ -854,7 +857,10 @@ app.use((req, res, next) => {
 function outboundTargetAuthorized(chatId) {
   if (!chatId) return false;
   if (String(chatId).endsWith('@g.us')) {
-    return matchesAllowedUser(chatId, ALLOWED_REPLY_GROUPS, SESSION_DIR);
+    return (
+      matchesAllowedUser(chatId, ALLOWED_REPLY_GROUPS, SESSION_DIR) ||
+      matchesAllowedUser(chatId, ALLOWED_OUTBOUND_GROUPS, SESSION_DIR)
+    );
   }
   const target = String(chatId).replace(/@.*/, '').replace(/\D/g, '');
   return matchesAllowedUser(target, ALLOWED_USERS, SESSION_DIR);
