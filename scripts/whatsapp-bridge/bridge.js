@@ -24,7 +24,7 @@ import express from 'express';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import path from 'path';
-import { mkdirSync, readFileSync, existsSync, readdirSync, unlinkSync } from 'fs';
+import { mkdirSync, readFileSync, existsSync, readdirSync, unlinkSync, appendFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { randomBytes, createHash } from 'crypto';
 import { execFileSync } from 'child_process';
@@ -114,6 +114,15 @@ const PAIR_JSON = args.includes('--pair-json');
 const WHATSAPP_MODE = getArg('mode', process.env.WHATSAPP_MODE || 'self-chat'); // "bot" or "self-chat"
 const WHATSAPP_DM_POLICY = String(process.env.WHATSAPP_DM_POLICY || 'open').trim().toLowerCase();
 const ALLOWED_USERS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_USERS || '');
+const ALLOWED_REPLY_GROUPS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_REPLY_GROUPS || '');
+// Outbound-only groups: API /send may deliver to these groups, but inbound
+// messages from them are NOT reply-authorized (kirim-only, no balas).
+const ALLOWED_OUTBOUND_GROUPS = parseAllowedUsers(process.env.WHATSAPP_ALLOWED_OUTBOUND_GROUPS || '');
+// Intake and reply authorization are separate: when enabled, retain every
+// inbound message, while ALLOWED_USERS remains the only reply authorization.
+const INTAKE_ALL_USERS = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.WHATSAPP_INTAKE_ALL_USERS || '').toLowerCase(),
+);
 const DEFAULT_REPLY_PREFIX = '⚕ *Hermes Agent*\n────────────\n';
 const REPLY_PREFIX = process.env.WHATSAPP_REPLY_PREFIX === undefined
   ? DEFAULT_REPLY_PREFIX
@@ -625,7 +634,7 @@ async function startSocket() {
           } catch {}
           continue;
         }
-        if (WHATSAPP_DM_POLICY !== 'pairing' && !matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)) {
+        if (!INTAKE_ALL_USERS && WHATSAPP_DM_POLICY !== 'pairing' && !matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR)) {
           try {
             console.log(JSON.stringify({
               event: 'ignored',
@@ -638,6 +647,11 @@ async function startSocket() {
         }
       }
 
+      // Keep intake open, but explicitly mark whether the sender is allowed
+      // to receive an agent response. The adapter must honor this marker.
+      const replyAuthorized = isGroup
+        ? matchesAllowedUser(chatId, ALLOWED_REPLY_GROUPS, SESSION_DIR)
+        : matchesAllowedUser(senderId, ALLOWED_USERS, SESSION_DIR);
       const messageContent = getMessageContent(msg);
       if (messageContent.pollUpdateMessage) {
         const pollUpdateMessage = messageContent.pollUpdateMessage;
@@ -713,6 +727,7 @@ async function startSocket() {
         },
       });
       event.fromOwner = fromOwner;
+      event.replyAuthorized = replyAuthorized;
 
       // Ignore Hermes' own reply messages in self-chat mode to avoid loops.
       if (msg.key.fromMe && ((REPLY_PREFIX && event.body.startsWith(REPLY_PREFIX)) || recentlySentIds.has(msg.key.id))) {
@@ -739,6 +754,35 @@ async function startSocket() {
       }
 
       messageStore.remember(msg);
+      // Durable intake spool: every real inbound message is appended to a
+      // daily JSONL file under <session>/../intake/YYYY/MM/YYYYMMDD.jsonl.
+      // This persists ALL senders (including silent-ingest non-owner
+      // messages) so OTP/correlation lookups never depend on a live queue.
+      try {
+        const _now = new Date();
+        const _y = _now.getFullYear();
+        const _m = String(_now.getMonth() + 1).padStart(2, '0');
+        const _d = String(_now.getDate()).padStart(2, '0');
+        const _intakeDir = path.join(SESSION_DIR, '..', 'intake', String(_y), _m);
+        mkdirSync(_intakeDir, { recursive: true });
+        const _line = JSON.stringify({
+          ts: _now.toISOString(),
+          chatId,
+          senderId,
+          senderNumber,
+          isGroup,
+          fromOwner,
+          replyAuthorized,
+          body: event.body,
+          hasMedia: event.hasMedia,
+          mediaType: event.mediaType,
+          mediaUrls: event.mediaUrls || [],
+          messageId: event.messageId,
+        });
+        appendFileSync(path.join(_intakeDir, `${_y}${_m}${_d}.jsonl`), `${_line}\n`);
+      } catch (spoolErr) {
+        console.warn('[bridge] intake spool write failed:', spoolErr.message);
+      }
       messageQueue.push(event);
       emitDebugEvent({
         stage: 'queued',
@@ -788,6 +832,26 @@ app.use((req, res, next) => {
     return res.status(400).json({
       error: 'Invalid Host header. Bridge accepts loopback hosts only.',
     });
+  }
+  next();
+});
+
+// Outbound authorization is independent from inbound intake. In the
+// interactive profile only the configured owner may receive replies.
+function outboundTargetAuthorized(chatId) {
+  if (!chatId) return false;
+  if (String(chatId).endsWith('@g.us')) {
+    return (
+      matchesAllowedUser(chatId, ALLOWED_REPLY_GROUPS, SESSION_DIR) ||
+      matchesAllowedUser(chatId, ALLOWED_OUTBOUND_GROUPS, SESSION_DIR)
+    );
+  }
+  const target = String(chatId).replace(/@.*/, '').replace(/\D/g, '');
+  return matchesAllowedUser(target, ALLOWED_USERS, SESSION_DIR);
+}
+app.use(['/send', '/edit', '/send-media', '/send-poll', '/send-location', '/typing'], (req, res, next) => {
+  if (!outboundTargetAuthorized(req.body?.chatId)) {
+    return res.status(403).json({ error: 'Outbound target is not authorized' });
   }
   next();
 });

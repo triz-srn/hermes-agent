@@ -240,7 +240,19 @@ class WhatsAppBehaviorMixin:
 
     def _message_is_reply_to_bot(self, data: Dict[str, Any]) -> bool:
         quoted_participant = self._normalize_whatsapp_id(data.get("quotedParticipant"))
-        return bool(quoted_participant) and quoted_participant in self._bot_ids_from_message(data)
+        if not quoted_participant:
+            return False
+        bot_ids = self._bot_ids_from_message(data)
+        if quoted_participant in bot_ids:
+            return True
+        # LID/index tolerance: Baileys contextInfo.participant arrives without
+        # the device index (e.g. 86913612542180@lid) while sock.user.lid
+        # carries it (e.g. 86913612542180:13@lid → normalized 86913612542180@13@lid).
+        # Exact match fails, so fall back to comparing bare numbers.
+        quoted_bare = quoted_participant.split("@", 1)[0]
+        if not quoted_bare:
+            return False
+        return any(bid.split("@", 1)[0] == quoted_bare for bid in bot_ids)
 
     def _message_mentions_bot(self, data: Dict[str, Any]) -> bool:
         bot_ids = self._bot_ids_from_message(data)
@@ -248,6 +260,12 @@ class WhatsAppBehaviorMixin:
             return False
         mentioned = {nid for c in (data.get("mentionedIds") or []) if (nid := self._normalize_whatsapp_id(c))}
         if mentioned & bot_ids:
+            return True
+        # Same LID/index tolerance as _message_is_reply_to_bot: mentionedJid
+        # may lack the device index that botIds carries.
+        mentioned_bare = {nid.split("@", 1)[0] for nid in mentioned if nid}
+        bot_bare = {bid.split("@", 1)[0] for bid in bot_ids if bid}
+        if mentioned_bare & bot_bare:
             return True
         lower_body = str(data.get("body") or "").lower()
         return any(

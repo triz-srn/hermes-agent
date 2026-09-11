@@ -227,6 +227,11 @@ _CONTEXT_OVERFLOW_PATTERNS = (
 _MODEL_NOT_FOUND_PATTERNS = (
     "is not a valid model", "invalid model", "model not found", "model_not_found", "does not exist",
     "no such model", "unknown model", "unsupported model", "no endpoints found that support tool use",
+    # 9Router gateway (multi-provider aggregator) surfaces a dead/missing
+    # upstream credential as 404 with code="model_not_found" and this message,
+    # so a model whose upstream provider was deactivated fails over to the
+    # configured fallback chain instead of killing the job.
+    "no active credentials",
 )
 
 # Qwen/vLLM chat-template "No user query found". Shared by the invalid-body
