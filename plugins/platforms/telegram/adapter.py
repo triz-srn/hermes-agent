@@ -300,6 +300,40 @@ _RICH_PROTECTED_REGION_RE = re.compile(
     re.MULTILINE)
 
 
+# ATX heading at the start of a line (``# Title`` .. ``###### Title``); demoted to bold by
+# _rich_demote_headings so the rich path keeps the body font size instead of Telegram's <h1>-<h6>.
+_RICH_HEADING_RE = re.compile(r'^(#{1,6})[ \t]+(.+?)[ \t]*$', re.MULTILINE)
+
+
+def _rich_demote_headings(text: str) -> str:
+    """Turn ATX headings into bold so the rich path never changes font size.
+
+    Telegram maps ``##`` in ``sendRichMessage`` markdown to ``InputRichBlockSectionHeading``
+    (HTML ``<h1>``–``<h6>``) — visibly larger than body text. Rich exists here only to keep
+    tables/task lists/details/footers native, NOT to restyle headings, and the legacy
+    MarkdownV2 path already renders a heading as plain bold (see ``_convert_header``).
+    Demote outside fenced code blocks and pipe tables so both paths agree.
+    """
+    if not text or '#' not in text:
+        return text
+
+    def _demote(chunk: str) -> str:
+        def _sub(m: "re.Match[str]") -> str:
+            inner = re.sub(r'\*\*(.+?)\*\*', r'\1', m.group(2).strip())
+            return f'**{inner}**' if inner else m.group(0)
+
+        return _RICH_HEADING_RE.sub(_sub, chunk)
+
+    out: list[str] = []
+    pos = 0
+    for m in _RICH_PROTECTED_REGION_RE.finditer(text):
+        out.append(_demote(text[pos:m.start()]))
+        out.append(m.group(0))  # protected region kept verbatim
+        pos = m.end()
+    out.append(_demote(text[pos:]))
+    return ''.join(out)
+
+
 def _rich_normalize_linebreaks(text: str) -> str:
     """Convert lone ``\\n`` (a Markdown soft break) to hard breaks for sendRichMessage; ``\\n\\n``,
     fenced code and pipe tables are left untouched."""
@@ -1329,7 +1363,7 @@ class TelegramAdapter(TelegramWisdomMixin, BasePlatformAdapter):
     def _rich_message_payload(self, content: str, *, skip_entity_detection: bool = False) -> Dict[str, Any]:
         """``InputRichMessage`` from RAW markdown — never ``format_message(content)``, whose MarkdownV2
         escaping destroys table pipes."""
-        payload: Dict[str, Any] = {"markdown": _rich_normalize_linebreaks(content)}
+        payload: Dict[str, Any] = {"markdown": _rich_normalize_linebreaks(_rich_demote_headings(content))}
         if skip_entity_detection:
             payload["skip_entity_detection"] = True
         return payload

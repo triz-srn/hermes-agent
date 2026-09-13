@@ -670,8 +670,13 @@ async def test_finalize_edit_uses_rich_for_table_content():
     assert result.message_id == "555"  # same message, edited in place
     api_kwargs = _rich_edit_kwargs(adapter)
     assert api_kwargs["message_id"] == 555
-    # RAW markdown is passed through so table pipes survive.
-    assert api_kwargs["rich_message"]["markdown"] == RICH_CONTENT
+    # RAW markdown is passed through so table pipes survive — except ATX headings, which the
+    # rich path demotes to bold so the body font size never changes (`_rich_demote_headings`).
+    sent = api_kwargs["rich_message"]["markdown"]
+    assert "|---|---|" in sent  # table structure untouched
+    assert "| rich | ✅ |" in sent
+    assert "\n## Results" not in sent and not sent.startswith("## ")
+    assert sent.startswith("**Results**")
     # No fresh send / delete — the whole point of the in-place rich edit.
     adapter._bot.edit_message_text.assert_not_called()
     adapter._bot.delete_message.assert_not_called()
